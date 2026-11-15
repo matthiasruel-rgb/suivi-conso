@@ -158,6 +158,10 @@ def main():
     except RuntimeError as e:
         erreurs.append(f"Courbe horaire indisponible ({e}). Activez la collecte horaire dans votre espace Enedis.")
 
+    # reclasse toute la courbe gardée avec les plages actuelles (si elles ont changé dans config.json)
+    for k, val in donnees["courbe"].items():
+        val[1] = "HC" if est_hc(dt.datetime.fromisoformat(k), pl) else "HP"
+
     # heures pleines / creuses par jour, à partir de la courbe
     parjour = {}
     for k, (kwh, per) in donnees["courbe"].items():
