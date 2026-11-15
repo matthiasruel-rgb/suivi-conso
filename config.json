@@ -1,0 +1,7 @@
+{
+  "prix_kwh_heures_pleines": 0.27,
+  "prix_kwh_heures_creuses": 0.21,
+  "heures_creuses": "22:00-06:00",
+  "abonnement_mois": 15,
+  "jours_historique_premier_lancement": 365
+}

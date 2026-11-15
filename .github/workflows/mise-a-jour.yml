@@ -1,0 +1,36 @@
+name: Mise à jour quotidienne Linky
+
+on:
+  schedule:
+    - cron: "34 8 * * *"   # chaque jour vers 9h34 (heure de Paris en hiver)
+  workflow_dispatch: {}     # bouton « Run workflow » pour lancer à la main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linky
+  cancel-in-progress: false
+
+jobs:
+  maj:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install cryptography
+      - name: Récupérer les données Linky
+        env:
+          LINKY_PRM: ${{ secrets.LINKY_PRM }}
+          LINKY_JETON: ${{ secrets.LINKY_JETON }}
+          MOT_DE_PASSE_PAGE: ${{ secrets.MOT_DE_PASSE_PAGE }}
+        run: python recuperer.py
+      - name: Enregistrer
+        run: |
+          git config user.name "suivi-conso"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/donnees.chiffre
+          git diff --cached --quiet || git commit -m "Données du $(date +%F)"
+          git push

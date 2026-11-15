@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Ma conso électrique</title>
+<style>
+  :root{--hp:#e8710a;--hc:#1a73e8;--fond:#f6f7f9;--txt:#202124;--gris:#5f6368}
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,system-ui,sans-serif;margin:0;background:var(--fond);color:var(--txt)}
+  header{background:var(--hc);color:#fff;padding:16px 16px 14px}
+  h1{font-size:20px;margin:0}header small{opacity:.85}
+  h2{font-size:16px;margin:0 0 10px}
+  main{max-width:760px;margin:0 auto}
+  .carte{background:#fff;margin:12px;padding:14px;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .tuiles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .tuile{background:var(--fond);border-radius:10px;padding:10px}
+  .tuile b{display:block;font-size:22px;margin-top:2px}.tuile span{font-size:12px;color:var(--gris)}
+  .ligne{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid #eee}
+  .ligne small{display:block;color:var(--gris)}.ligne b{white-space:nowrap}
+  .barres{display:flex;align-items:flex-end;height:170px;gap:2px;padding-bottom:20px}
+  .barre{flex:1;height:100%;display:flex;flex-direction:column-reverse;position:relative}
+  .barre i{display:block}.barre .hp{background:var(--hp);border-radius:2px 2px 0 0}.barre .hc{background:var(--hc)}
+  .barre .tot{background:#80868b;border-radius:2px 2px 0 0}
+  .barre em{position:absolute;bottom:-18px;left:-4px;right:-4px;font-size:9px;font-style:normal;text-align:center;color:var(--gris)}
+  .barre.alerte .tot,.barre.alerte .hp{outline:2px solid #d93025}
+  .leg{font-size:12px;color:var(--gris)}.leg i{display:inline-block;width:10px;height:10px;margin:0 4px 0 10px;vertical-align:middle;border-radius:2px}
+  .alerte-txt{background:#fce8e6;color:#a50e0e;padding:10px;border-radius:8px;margin-top:10px}
+  button,input{font-size:16px;padding:12px;border-radius:10px;border:1px solid #dadce0;width:100%}
+  button{background:var(--hc);color:#fff;border:0;font-weight:600;margin-top:10px}
+  button.sec{background:#fff;color:var(--hc);border:1px solid var(--hc)}
+  #ecran-mdp{max-width:420px;margin:40px auto}
+  #erreur{color:#d93025;margin-top:8px}
+  label{font-size:14px;color:var(--gris);display:flex;gap:8px;align-items:center;margin-top:10px}
+  label input{width:auto}
+  .cache{display:none}
+</style>
+</head>
+<body>
+<header><h1>⚡ Ma consommation électrique</h1><small id="maj">Page protégée</small></header>
+
+<main>
+<div id="ecran-mdp" class="carte">
+  <h2>🔒 Mot de passe</h2>
+  <form id="form">
+    <input id="mdp" type="password" autocomplete="current-password" placeholder="Votre mot de passe">
+    <label><input id="souvenir" type="checkbox" checked> Se souvenir sur cet appareil</label>
+    <button type="submit">Ouvrir</button>
+    <div id="erreur"></div>
+  </form>
+</div>
+
+<div id="contenu" class="cache">
+  <div class="carte"><div class="tuiles" id="tuiles"></div><div id="alertes"></div></div>
+  <div class="carte"><h2>30 derniers jours (kWh)</h2>
+    <div class="leg"><i style="background:var(--hp)"></i>Heures pleines<i style="background:var(--hc)"></i>Heures creuses</div>
+    <div id="g-jours"></div></div>
+  <div class="carte"><h2>À quelle heure je consomme ? (kW moyen, 30 j)</h2><div id="g-profil"></div></div>
+  <div class="carte"><h2>Coût par mois (€, abonnement inclus)</h2><div id="g-mois"></div></div>
+  <div class="carte"><h2>Détail</h2><div id="details"></div></div>
+  <div class="carte">
+    <button id="excel">📥 Télécharger le fichier Excel</button>
+    <button id="quitter" class="sec">Se déconnecter de cet appareil</button>
+  </div>
+</div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const fmt = (x, d = 1) => x == null || isNaN(x) ? '–' : x.toLocaleString('fr-FR', {minimumFractionDigits: d, maximumFractionDigits: d});
+const euros = x => fmt(x, 2) + ' €';
+let D = null, LIGNES = [];
+
+async function dechiffrer(mdp) {
+  const r = await fetch('donnees.chiffre?' + Date.now());
+  if (!r.ok) throw new Error('Pas encore de données : la première mise à jour n\'a pas eu lieu.');
+  const e = await r.json();
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(mdp), 'PBKDF2', false, ['deriveKey']);
+  const cle = await crypto.subtle.deriveKey({name: 'PBKDF2', salt: b64(e.sel), iterations: e.iter, hash: 'SHA-256'},
+    base, {name: 'AES-GCM', length: 256}, false, ['decrypt']);
+  try {
+    const clair = await crypto.subtle.decrypt({name: 'AES-GCM', iv: b64(e.iv)}, cle, b64(e.donnees));
+    return JSON.parse(new TextDecoder().decode(clair));
+  } catch (_) { throw new Error('Mot de passe incorrect.'); }
+}
+
+async function ouvrir(mdp, memoriser) {
+  $('erreur').textContent = 'Ouverture…';
+  try {
+    D = await dechiffrer(mdp);
+    if (memoriser) localStorage.setItem('mdp-conso', mdp);
+    $('ecran-mdp').classList.add('cache'); $('contenu').classList.remove('cache');
+    afficher();
+  } catch (e) { $('erreur').textContent = e.message; localStorage.removeItem('mdp-conso'); }
+}
+
+function barres(items, hauteurMax) {
+  const max = Math.max(0.001, ...items.map(x => (x.hp || 0) + (x.hc || 0) + (x.tot || 0)));
+  return '<div class="barres">' + items.map(x =>
+    `<div class="barre${x.alerte ? ' alerte' : ''}" title="${x.titre}">` +
+    (x.tot != null ? `<i class="tot" style="height:${x.tot / max * 100}%"></i>` :
+      `<i class="hc" style="height:${(x.hc || 0) / max * 100}%"></i><i class="hp" style="height:${(x.hp || 0) / max * 100}%"></i>`) +
+    `<em>${x.lib}</em></div>`).join('') + '</div>';
+}
+
+function afficher() {
+  const c = D.config, pHP = +c.prix_kwh_heures_pleines, pHC = +c.prix_kwh_heures_creuses, abo = +c.abonnement_mois;
+  $('maj').textContent = 'Mise à jour : ' + D.mise_a_jour;
+  const jours = Object.keys(D.jours).sort();
+  LIGNES = jours.map((j, i) => {
+    const x = D.jours[j], split = x.hp != null;
+    const cout = split ? x.hp * pHP + x.hc * pHC : x.total * pHP;
+    const prec = jours.slice(Math.max(0, i - 30), i).map(k => D.jours[k].total);
+    const moy = prec.length >= 7 ? prec.reduce((a, b) => a + b, 0) / prec.length : null;
+    return {jour: j, hp: split ? x.hp : null, hc: split ? x.hc : null, total: x.total, cout, ecart: moy ? x.total / moy - 1 : null};
+  });
+  if (!LIGNES.length) { $('tuiles').innerHTML = '<p>Pas encore de données.</p>'; return; }
+  const der = LIGNES[LIGNES.length - 1], l30 = LIGNES.slice(-30);
+  const somme = (a, f) => a.reduce((s, x) => s + (f(x) || 0), 0);
+  const moyKwh = somme(l30, x => x.total) / l30.length, moyEur = somme(l30, x => x.cout) / l30.length;
+  const hp30 = somme(l30, x => x.hp), hc30 = somme(l30, x => x.hc);
+  const auj = new Date(), cleMois = auj.toISOString().slice(0, 7);
+  const lm = LIGNES.filter(x => x.jour.startsWith(cleMois));
+  const joursMois = new Date(auj.getFullYear(), auj.getMonth() + 1, 0).getDate();
+  const proj = (lm.length ? somme(lm, x => x.cout) / lm.length : moyEur) * joursMois + abo;
+
+  // profil horaire et consommation de fond (30 derniers jours de courbe)
+  const limite = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  const pts = Object.entries(D.courbe).filter(([k]) => k >= limite);
+  const parH = Array.from({length: 24}, () => []);
+  pts.forEach(([k, [kwh]]) => parH[+k.slice(11, 13)].push(kwh * 2));
+  const profil = parH.map(a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);
+  const toutes = pts.map(([, [kwh]]) => kwh * 2).sort((a, b) => a - b);
+  const fondW = toutes.length ? toutes[Math.floor(toutes.length * 0.1)] * 1000 : null;
+  const prixMoy = hp30 + hc30 > 0 ? (hp30 * pHP + hc30 * pHC) / (hp30 + hc30) : pHP;
+  const hPic = profil.indexOf(Math.max(...profil.map(x => x || 0)));
+  const hcDe = {}; pts.forEach(([k, [, per]]) => hcDe[+k.slice(11, 13)] = per);
+
+  const dDer = new Date(der.jour).toLocaleDateString('fr-FR', {weekday: 'short', day: 'numeric', month: 'short'});
+  $('tuiles').innerHTML = [
+    [`Hier (${dDer})`, fmt(der.total) + ' kWh', euros(der.cout)],
+    ['Moyenne 30 j', fmt(moyKwh) + ' kWh/j', euros(moyEur) + ' /jour'],
+    ['Ce mois-ci (estimation)', euros(proj), 'abonnement inclus'],
+    ['Sur 12 mois (estimation)', euros(moyEur * 365 + abo * 12), 'au rythme actuel'],
+  ].map(([t, v, s]) => `<div class="tuile"><span>${t}</span><b>${v}</b><span>${s}</span></div>`).join('');
+
+  const al = [];
+  if (der.ecart != null && der.ecart >= 0.3) al.push(`⚠️ Hier : ${Math.round(der.ecart * 100)} % de plus que votre moyenne.`);
+  (D.erreurs || []).forEach(e => al.push('ℹ️ ' + e));
+  $('alertes').innerHTML = al.map(a => `<div class="alerte-txt">${a}</div>`).join('');
+
+  $('g-jours').innerHTML = barres(l30.map(x => ({
+    lib: x.jour.slice(8), alerte: x.ecart != null && x.ecart >= 0.3,
+    titre: `${x.jour} : ${fmt(x.total)} kWh, ${euros(x.cout)}`,
+    ...(x.hp != null ? {hp: x.hp, hc: x.hc} : {tot: x.total})})));
+  $('g-profil').innerHTML = profil.some(x => x != null)
+    ? barres(profil.map((v, h) => ({lib: h % 3 === 0 ? h + 'h' : '', titre: `${h}h : ${fmt(v, 2)} kW`,
+        [hcDe[h] === 'HC' ? 'hc' : 'hp']: v || 0})))
+    : '<p class="leg">Courbe horaire non disponible : activez « l\'enregistrement de la consommation horaire » dans votre espace Enedis.</p>';
+  const mois = {};
+  LIGNES.forEach(x => { const m = x.jour.slice(0, 7); mois[m] = (mois[m] || 0) + x.cout; });
+  const lMois = Object.keys(mois).sort().slice(-12);
+  $('g-mois').innerHTML = barres(lMois.map(m => ({lib: m.slice(5) + '/' + m.slice(2, 4), tot: mois[m] + abo,
+    titre: `${m} : ${euros(mois[m] + abo)}`})));
+
+  $('details').innerHTML = [
+    ['Part en heures creuses (30 j)', hp30 + hc30 > 0 ? Math.round(hc30 / (hp30 + hc30) * 100) + ' %' : '–'],
+    ['Consommation de fond', fondW == null ? '–' : Math.round(fondW) + ' W',
+      'Appareils toujours allumés (frigo, box, veilles…)'],
+    ['Coût annuel de ce fond', fondW == null ? '–' : euros(fondW / 1000 * 8760 * prixMoy)],
+    ['Heure la plus chargée', profil.some(x => x) ? hPic + 'h (' + fmt(profil[hPic], 2) + ' kW)' : '–'],
+    ['Ce mois-ci, jusqu\'à hier', fmt(somme(lm, x => x.total)) + ' kWh', euros(somme(lm, x => x.cout)) + ' hors abonnement'],
+  ].map(([a, b, s]) => `<div class="ligne"><div>${a}${s ? '<small>' + s + '</small>' : ''}</div><b>${b}</b></div>`).join('');
+}
+
+function telechargerExcel() {
+  const n = (x, d = 3) => x == null ? '' : x.toFixed(d).replace('.', ',');
+  const lignes = [['Date', 'Heures pleines (kWh)', 'Heures creuses (kWh)', 'Total (kWh)', 'Coût (€)', 'Écart vs moyenne 30 j (%)'].join(';')]
+    .concat(LIGNES.map(x => [x.jour.split('-').reverse().join('/'), n(x.hp), n(x.hc), n(x.total), n(x.cout, 2),
+      x.ecart == null ? '' : Math.round(x.ecart * 100)].join(';')));
+  const blob = new Blob(['\ufeff' + lignes.join('\r\n')], {type: 'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'conso-electricite.csv'; a.click();
+}
+
+$('form').addEventListener('submit', e => { e.preventDefault(); ouvrir($('mdp').value, $('souvenir').checked); });
+$('excel').addEventListener('click', telechargerExcel);
+$('quitter').addEventListener('click', () => { localStorage.removeItem('mdp-conso'); location.reload(); });
+const memo = localStorage.getItem('mdp-conso');
+if (memo) ouvrir(memo, true);
+</script>
+</body>
+</html>
