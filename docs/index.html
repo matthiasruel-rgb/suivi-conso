@@ -20,11 +20,21 @@
   .tuile b{display:block;font-size:22px;margin-top:2px}.tuile span{font-size:12px;color:var(--gris)}
   .ligne{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid #eee}
   .ligne small{display:block;color:var(--gris)}.ligne b{white-space:nowrap}
-  .barres{display:flex;align-items:flex-end;height:170px;gap:2px;padding-bottom:20px}
-  .barre{flex:1;height:100%;display:flex;flex-direction:column-reverse;position:relative}
+  .graph{display:flex;gap:6px}
+  .axe{position:relative;width:34px;height:170px;font-size:10px;color:var(--gris);text-align:right}
+  .axe span{position:absolute;right:0;transform:translateY(50%)}
+  .zone{flex:1;position:relative}
+  .grille{position:absolute;left:0;right:0;border-top:1px dashed #e0e0e0}
+  .barres{display:flex;align-items:flex-end;height:170px;gap:2px;position:relative}
+  .etiquettes{display:flex;gap:2px;height:20px}
+  .etiquettes em{flex:1;font-size:9px;font-style:normal;text-align:center;color:var(--gris);overflow:visible;white-space:nowrap}
+  .valeur{position:absolute;bottom:100%;left:-6px;right:-6px;font-size:10px;text-align:center;color:var(--txt);font-weight:600}
+  .barre.choisie i{filter:brightness(.8)}
+  .info{min-height:22px;font-size:14px;margin:6px 0 2px;color:var(--txt)}
+  .info b{color:var(--hc)}
+  .barre{flex:1;height:100%;display:flex;flex-direction:column-reverse;position:relative;cursor:pointer}
   .barre i{display:block}.barre .hp{background:var(--hp);border-radius:2px 2px 0 0}.barre .hc{background:var(--hc)}
   .barre .tot{background:#80868b;border-radius:2px 2px 0 0}
-  .barre em{position:absolute;bottom:-18px;left:-4px;right:-4px;font-size:9px;font-style:normal;text-align:center;color:var(--gris)}
   .barre.alerte .tot,.barre.alerte .hp{outline:2px solid #d93025}
   .leg{font-size:12px;color:var(--gris)}.leg i{display:inline-block;width:10px;height:10px;margin:0 4px 0 10px;vertical-align:middle;border-radius:2px}
   .alerte-txt{background:#fce8e6;color:#a50e0e;padding:10px;border-radius:8px;margin-top:10px}
@@ -97,14 +107,41 @@ async function ouvrir(mdp, memoriser) {
   } catch (e) { $('erreur').textContent = e.message; localStorage.removeItem('mdp-conso'); }
 }
 
-function barres(items, hauteurMax) {
-  const max = Math.max(0.001, ...items.map(x => (x.hp || 0) + (x.hc || 0) + (x.tot || 0)));
-  return '<div class="barres">' + items.map(x =>
-    `<div class="barre${x.alerte ? ' alerte' : ''}" title="${x.titre}">` +
-    (x.tot != null ? `<i class="tot" style="height:${x.tot / max * 100}%"></i>` :
-      `<i class="hc" style="height:${(x.hc || 0) / max * 100}%"></i><i class="hp" style="height:${(x.hp || 0) / max * 100}%"></i>`) +
-    `<em>${x.lib}</em></div>`).join('') + '</div>';
+function graduation(max) {
+  const brut = max / 4, p = Math.pow(10, Math.floor(Math.log10(brut))), n = brut / p;
+  const pas = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
+  return {pas, haut: Math.ceil(max / pas) * pas || pas};
 }
+let NUM = 0; const DETAILS = {};
+function barres(items, unite, opts = {}) {
+  const id = 'g' + (NUM++);
+  const max0 = Math.max(0.001, ...items.map(x => (x.hp || 0) + (x.hc || 0) + (x.tot || 0)));
+  const {pas, haut} = graduation(max0);
+  let axe = '', grille = '';
+  for (let v = 0; v <= haut + 1e-9; v += pas) {
+    const pc = v / haut * 100, txt = fmt(v, pas < 1 ? 1 : 0);
+    axe += `<span style="bottom:${pc}%">${txt}</span>`;
+    grille += `<div class="grille" style="bottom:${pc}%"></div>`;
+  }
+  DETAILS[id] = items.map(x => x.detail);
+  const corps = items.map((x, i) => {
+    const t = (x.hp || 0) + (x.hc || 0) + (x.tot || 0);
+    return `<div class="barre${x.alerte ? ' alerte' : ''}" data-g="${id}" data-i="${i}">` +
+      (x.tot != null ? `<i class="tot" style="height:${x.tot / haut * 100}%"></i>` :
+        `<i class="hc" style="height:${(x.hc || 0) / haut * 100}%"></i><i class="hp" style="height:${(x.hp || 0) / haut * 100}%"></i>`) +
+      (opts.valeurs ? `<span class="valeur" style="bottom:${t / haut * 100}%">${fmt(t, 0)}</span>` : '') + '</div>';
+  }).join('');
+  return `<div class="info" id="${id}-info">${opts.aide || 'Touchez une barre pour voir le détail.'}</div>` +
+    `<div class="graph"><div class="axe">${axe}</div><div class="zone">${grille}<div class="barres">${corps}</div>` +
+    `<div class="etiquettes">${items.map(x => `<em>${x.lib}</em>`).join('')}</div></div></div>` +
+    `<div class="leg" style="text-align:left;margin-left:40px">Échelle : ${unite}</div>`;
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('.barre'); if (!b) return;
+  document.querySelectorAll(`.barre[data-g="${b.dataset.g}"]`).forEach(x => x.classList.remove('choisie'));
+  b.classList.add('choisie');
+  document.getElementById(b.dataset.g + '-info').innerHTML = DETAILS[b.dataset.g][+b.dataset.i];
+});
 
 function afficher() {
   const c = D.config, pHP = +c.prix_kwh_heures_pleines, pHC = +c.prix_kwh_heures_creuses, abo = +c.abonnement_mois;
@@ -153,18 +190,22 @@ function afficher() {
   $('alertes').innerHTML = al.map(a => `<div class="alerte-txt">${a}</div>`).join('');
 
   $('g-jours').innerHTML = barres(l30.map(x => ({
-    lib: x.jour.slice(8), alerte: x.ecart != null && x.ecart >= 0.3,
-    titre: `${x.jour} : ${fmt(x.total)} kWh, ${euros(x.cout)}`,
-    ...(x.hp != null ? {hp: x.hp, hc: x.hc} : {tot: x.total})})));
+    lib: (+x.jour.slice(8)) % 5 === 0 || x === l30[l30.length - 1] ? +x.jour.slice(8) : '', alerte: x.ecart != null && x.ecart >= 0.3,
+    detail: `<b>${new Date(x.jour).toLocaleDateString('fr-FR', {weekday: 'long', day: 'numeric', month: 'long'})}</b> : ${fmt(x.total)} kWh, ${euros(x.cout)}` +
+      (x.hp != null ? ` <span class="leg">(HP ${fmt(x.hp)} · HC ${fmt(x.hc)})</span>` : ''),
+    ...(x.hp != null ? {hp: x.hp, hc: x.hc} : {tot: x.total})})), 'kWh par jour');
   $('g-profil').innerHTML = profil.some(x => x != null)
-    ? barres(profil.map((v, h) => ({lib: h % 3 === 0 ? h + 'h' : '', titre: `${h}h : ${fmt(v, 2)} kW`,
-        [hcDe[h] === 'HC' ? 'hc' : 'hp']: v || 0})))
+    ? barres(profil.map((v, h) => ({lib: h % 3 === 0 ? h + 'h' : '',
+        detail: `<b>De ${h}h à ${h + 1}h</b> : ${fmt(v, 2)} kW en moyenne (${hcDe[h] === 'HC' ? 'heures creuses' : 'heures pleines'})`,
+        [hcDe[h] === 'HC' ? 'hc' : 'hp']: v || 0})), 'kW (puissance moyenne)')
     : '<p class="leg">Courbe horaire non disponible : activez « l\'enregistrement de la consommation horaire » dans votre espace Enedis.</p>';
   const mois = {};
   LIGNES.forEach(x => { const m = x.jour.slice(0, 7); mois[m] = (mois[m] || 0) + x.cout; });
   const lMois = Object.keys(mois).sort().slice(-12);
-  $('g-mois').innerHTML = barres(lMois.map(m => ({lib: m.slice(5) + '/' + m.slice(2, 4), tot: mois[m] + abo,
-    titre: `${m} : ${euros(mois[m] + abo)}`})));
+  const nomMois = m => new Date(m + '-15').toLocaleDateString('fr-FR', {month: 'short'});
+  $('g-mois').innerHTML = barres(lMois.map(m => ({lib: nomMois(m), tot: mois[m] + abo,
+    detail: `<b>${new Date(m + '-15').toLocaleDateString('fr-FR', {month: 'long', year: 'numeric'})}</b> : ${euros(mois[m] + abo)} ` +
+      `<span class="leg">(${fmt(LIGNES.filter(x => x.jour.startsWith(m)).reduce((s, x) => s + x.total, 0), 0)} kWh)</span>`})), '€ par mois', {valeurs: true});
 
   $('details').innerHTML = [
     ['Part en heures creuses (30 j)', hp30 + hc30 > 0 ? Math.round(hc30 / (hp30 + hc30) * 100) + ' %' : '–'],
