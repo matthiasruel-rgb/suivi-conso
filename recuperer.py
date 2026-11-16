@@ -113,6 +113,49 @@ def blocs(debut, fin, taille):
         d = f
 
 
+# ---------- météo (Open-Meteo, gratuit, sans clé) ----------
+def lire_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "suivi-conso (GitHub Actions, usage personnel)"})
+    for essai in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        except (urllib.error.URLError, TimeoutError):
+            if essai == 2:
+                raise
+            time.sleep(10)
+
+def localiser(ville):
+    """Code postal ou nom de commune -> (latitude, longitude), en France en priorité."""
+    for pays in ("&countryCode=FR", ""):
+        r = lire_json("https://geocoding-api.open-meteo.com/v1/search?count=1&language=fr&format=json&name="
+                      + urllib.parse.quote(ville) + pays)
+        if r.get("results"):
+            return r["results"][0]["latitude"], r["results"][0]["longitude"]
+    raise RuntimeError("ville introuvable")
+
+def temperatures(lat, lon, debut, fin):
+    """Température moyenne de chaque jour de debut à fin (inclus), en °C."""
+    res = {}
+    def lire(r):
+        dl = r.get("daily") or {}
+        for j, t in zip(dl.get("time") or [], dl.get("temperature_2m_mean") or []):
+            if t is not None:
+                res[j] = round(float(t), 1)
+    commun = f"latitude={lat}&longitude={lon}&daily=temperature_2m_mean&timezone=Europe%2FParis"
+    if debut <= fin - dt.timedelta(days=5):  # archives (quelques jours de retard)
+        lire(lire_json(f"https://archive-api.open-meteo.com/v1/archive?{commun}"
+                       f"&start_date={debut.isoformat()}&end_date={(fin - dt.timedelta(days=2)).isoformat()}"))
+    recents = {}
+    r = lire_json(f"https://api.open-meteo.com/v1/forecast?{commun}&past_days=14&forecast_days=1")
+    for j, t in zip(r["daily"]["time"], r["daily"]["temperature_2m_mean"]):
+        if t is not None and debut.isoformat() <= j <= fin.isoformat():
+            recents[j] = round(float(t), 1)
+    for j, t in recents.items():
+        res.setdefault(j, t)  # les archives priment, les prévisions récentes complètent
+    return res
+
+
 def main():
     prm = re.sub(r"\D", "", os.environ.get("LINKY_PRM", ""))
     jeton = os.environ.get("LINKY_JETON", "").strip()
@@ -171,6 +214,22 @@ def main():
         j = donnees["jours"].setdefault(jour, {})
         j["hp"], j["hc"] = round(x["hp"], 3), round(x["hc"], 3)
         j.setdefault("total", round(x["hp"] + x["hc"], 3))
+
+    # température extérieure du jour (secret VILLE : code postal ou nom de la commune)
+    ville = os.environ.get("VILLE", "").strip()
+    if ville:
+        try:
+            lat, lon = localiser(ville)
+            sans_temp = [k for k in donnees["jours"] if "temp" not in donnees["jours"][k]]
+            hier = aujourdhui - dt.timedelta(days=1)
+            deb_meteo = min([dt.date.fromisoformat(k) for k in sans_temp] + [aujourdhui - dt.timedelta(days=10)])
+            for jour, t in temperatures(lat, lon, deb_meteo, hier).items():
+                if jour in donnees["jours"]:
+                    donnees["jours"][jour]["temp"] = t
+        except Exception as e:
+            erreurs.append(f"Météo indisponible aujourd'hui ({type(e).__name__} : {str(e)[:120]}).")
+    else:
+        erreurs.append("Pour afficher la température, ajoutez le secret VILLE (votre code postal) dans GitHub.")
 
     limite = (aujourdhui - dt.timedelta(days=JOURS_COURBE_GARDES)).isoformat()
     donnees["courbe"] = {k: v for k, v in sorted(donnees["courbe"].items()) if k >= limite}

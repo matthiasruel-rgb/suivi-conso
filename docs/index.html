@@ -46,6 +46,12 @@
   label{font-size:14px;color:var(--gris);display:flex;gap:8px;align-items:center;margin-top:10px}
   label input{width:auto}
   .cache{display:none}
+  .courbe-temp{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .moins{color:#188038}.plus{color:#d93025}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:7px 3px;border-bottom:1px solid #eee;text-align:right}td{white-space:nowrap}
+  th{font-size:12px;color:var(--gris);font-weight:500}th:first-child,td:first-child{text-align:left}
+  .resume{background:var(--fond);border-radius:10px;padding:10px;font-size:14px;margin:10px 0}
 </style>
 </head>
 <body>
@@ -65,8 +71,9 @@
 <div id="contenu" class="cache">
   <div class="carte"><div class="tuiles" id="tuiles"></div><div id="alertes"></div></div>
   <div class="carte"><h2>30 derniers jours (kWh)</h2>
-    <div class="leg"><i style="background:var(--hp)"></i>Heures pleines<i style="background:var(--hc)"></i>Heures creuses</div>
+    <div class="leg"><i style="background:var(--hp)"></i>Heures pleines<i style="background:var(--hc)"></i>Heures creuses<span id="leg-temp"></span></div>
     <div id="g-jours"></div></div>
+  <div class="carte"><h2>Semaine contre semaine</h2><div id="semaines"></div></div>
   <div class="carte"><h2>À quelle heure je consomme ? (kW moyen, 30 j)</h2><div id="g-profil"></div></div>
   <div class="carte"><h2>Coût par mois (€, abonnement inclus)</h2><div id="g-mois"></div></div>
   <div class="carte"><h2>Détail</h2><div id="details"></div></div>
@@ -132,10 +139,28 @@ function barres(items, unite, opts = {}) {
       (opts.valeurs ? `<span class="valeur" style="bottom:${t / haut * 100}%">${fmt(t, 0)}</span>` : '') + '</div>';
   }).join('');
   return `<div class="info" id="${id}-info">${opts.aide || 'Touchez une barre pour voir le détail.'}</div>` +
-    `<div class="graph"><div class="axe">${axe}</div><div class="zone">${grille}<div class="barres">${corps}</div>` +
+    `<div class="graph"><div class="axe">${axe}</div><div class="zone">${grille}<div class="barres">${corps}${opts.ligne ? courbeTemp(opts.ligne) : ''}</div>` +
     `<div class="etiquettes">${items.map(x => `<em>${x.lib}</em>`).join('')}</div></div></div>` +
     `<div class="leg" style="text-align:left;margin-left:40px">Échelle : ${unite}</div>`;
 }
+// température par-dessus les barres (échelle propre : du plus froid en bas au plus doux en haut)
+function courbeTemp(t) {
+  const ok = t.filter(x => x != null); if (ok.length < 2) return '';
+  const mn = Math.min(...ok) - 1, mx = Math.max(...ok) + 1, n = t.length;
+  let seg = [], d = '';
+  t.forEach((v, i) => {
+    if (v == null) { seg = []; return; }
+    const x = (i + 0.5) / n * 100, y = 100 - (v - mn) / (mx - mn) * 100;
+    d += (seg.length ? ' L' : ' M') + x.toFixed(2) + ' ' + y.toFixed(2); seg.push(v);
+  });
+  return `<svg class="courbe-temp" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="#c5221f" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>`;
+}
+const DJU_BASE = 18; // degrés-jours : 18 °C - température moyenne du jour (0 s'il fait plus de 18 °C)
+const signe = (x, d = 0) => (x > 0 ? '+' : x < 0 ? '−' : '') + fmt(Math.abs(x), d);
+const pct = x => { if (x == null || !isFinite(x)) return '–'; const r = Math.round(x * 100);
+  return `<span class="${r < 0 ? 'moins' : r > 0 ? 'plus' : ''}">${signe(r)} %</span>`; };
+const jourCourt = j => new Date(j + 'T12:00').toLocaleDateString('fr-FR', {day: 'numeric', month: 'short'});
+
 document.addEventListener('click', e => {
   const b = e.target.closest('.barre'); if (!b) return;
   document.querySelectorAll(`.barre[data-g="${b.dataset.g}"]`).forEach(x => x.classList.remove('choisie'));
@@ -152,8 +177,20 @@ function afficher() {
     const cout = split ? x.hp * pHP + x.hc * pHC : x.total * pHP;
     const prec = jours.slice(Math.max(0, i - 30), i).map(k => D.jours[k].total);
     const moy = prec.length >= 7 ? prec.reduce((a, b) => a + b, 0) / prec.length : null;
-    return {jour: j, hp: split ? x.hp : null, hc: split ? x.hc : null, total: x.total, cout, ecart: moy ? x.total / moy - 1 : null};
+    const temp = x.temp == null ? null : x.temp;
+    return {jour: j, hp: split ? x.hp : null, hc: split ? x.hc : null, total: x.total, cout, ecart: moy ? x.total / moy - 1 : null,
+      temp, dju: temp == null ? null : Math.max(0, DJU_BASE - temp)};
   });
+  // modèle simple sur 12 mois : conso du jour ≈ fond (hors chauffage) + k × degrés-jours
+  const pm = LIGNES.slice(-365).filter(x => x.dju != null);
+  let M = null;
+  if (pm.length >= 20 && pm.filter(x => x.dju >= 3).length >= 10) {
+    const mx = pm.reduce((s, x) => s + x.dju, 0) / pm.length, my = pm.reduce((s, x) => s + x.total, 0) / pm.length;
+    const sxy = pm.reduce((s, x) => s + (x.dju - mx) * (x.total - my), 0), sxx = pm.reduce((s, x) => s + (x.dju - mx) ** 2, 0);
+    const k = sxy / sxx;
+    if (k > 0) M = {k, fond: Math.max(0, my - k * mx)};
+  }
+  LIGNES.forEach(x => { x.attendu = M && x.dju != null ? M.fond + M.k * x.dju : null; });
   if (!LIGNES.length) { $('tuiles').innerHTML = '<p>Pas encore de données.</p>'; return; }
   const der = LIGNES[LIGNES.length - 1], l30 = LIGNES.slice(-30);
   const somme = (a, f) => a.reduce((s, x) => s + (f(x) || 0), 0);
@@ -192,8 +229,48 @@ function afficher() {
   $('g-jours').innerHTML = barres(l30.map(x => ({
     lib: (+x.jour.slice(8)) % 5 === 0 || x === l30[l30.length - 1] ? +x.jour.slice(8) : '', alerte: x.ecart != null && x.ecart >= 0.3,
     detail: `<b>${new Date(x.jour).toLocaleDateString('fr-FR', {weekday: 'long', day: 'numeric', month: 'long'})}</b> : ${fmt(x.total)} kWh, ${euros(x.cout)}` +
-      (x.hp != null ? ` <span class="leg">(HP ${fmt(x.hp)} · HC ${fmt(x.hc)})</span>` : ''),
-    ...(x.hp != null ? {hp: x.hp, hc: x.hc} : {tot: x.total})})), 'kWh par jour');
+      (x.hp != null ? ` <span class="leg">(HP ${fmt(x.hp)} · HC ${fmt(x.hc)})</span>` : '') +
+      (x.temp != null ? `<br>🌡️ ${fmt(x.temp)} °C` + (x.attendu ? ` · attendu pour cette météo : ${fmt(x.attendu)} kWh (${pct(x.total / x.attendu - 1)})` : '') : ''),
+    ...(x.hp != null ? {hp: x.hp, hc: x.hc} : {tot: x.total})})), 'kWh par jour', {ligne: l30.map(x => x.temp)});
+  const t30 = l30.map(x => x.temp).filter(x => x != null);
+  $('leg-temp').innerHTML = t30.length >= 2 ? `<i style="background:#c5221f;height:3px"></i>Température (de ${fmt(Math.min(...t30))} à ${fmt(Math.max(...t30))} °C)` : '';
+
+  // ---------- semaine contre semaine ----------
+  const bilan = a => {
+    const avecT = a.filter(x => x.temp != null), avecM = a.filter(x => x.attendu);
+    const hpOk = a.every(x => x.hp != null);
+    return {n: a.length, du: a[0].jour, au: a[a.length - 1].jour, total: somme(a, x => x.total), cout: somme(a, x => x.cout),
+      hp: hpOk ? somme(a, x => x.hp) : null, hc: hpOk ? somme(a, x => x.hc) : null,
+      temp: avecT.length ? somme(avecT, x => x.temp) / avecT.length : null,
+      meteo: avecM.length === a.length ? somme(a, x => x.total) / somme(a, x => x.attendu) - 1 : null};
+  };
+  if (LIGNES.length >= 14) {
+    const A = bilan(LIGNES.slice(-7)), B = bilan(LIGNES.slice(-14, -7));
+    const ligne = (nom, a, b, unite, d = 1, ecartEnValeur = false) => `<tr><td>${nom}</td><td>${a == null ? '–' : fmt(a, d) + unite}</td>` +
+      `<td>${b == null ? '–' : fmt(b, d) + unite}</td><td>${a == null || b == null ? '–' : ecartEnValeur ? signe(a - b, 1) + unite : pct(a / b - 1)}</td></tr>`;
+    const evol = A.total / B.total - 1;
+    let phrase = `Ces 7 derniers jours, vous avez consommé <b>${pct(evol)}</b> par rapport aux 7 jours d'avant (${signe(A.cout - B.cout, 2)} €).`;
+    if (A.temp != null && B.temp != null)
+      phrase += ` Il a fait en moyenne ${fmt(Math.abs(A.temp - B.temp))} °C ${A.temp >= B.temp ? 'de plus' : 'de moins'}.`;
+    if (A.meteo != null && B.meteo != null)
+      phrase += ` <b>Une fois la météo prise en compte</b>, vous êtes à ${pct(A.meteo)} de la consommation attendue, contre ${pct(B.meteo)} la semaine d'avant` +
+        (Math.abs(A.meteo - B.meteo) < 0.05 ? ' : pas de vraie différence.' : A.meteo < B.meteo ? ' : vous consommez vraiment moins. 👍' : ' : vous consommez vraiment plus.');
+    // semaines calendaires (lundi → dimanche), les 8 dernières
+    const sem = {};
+    LIGNES.forEach(x => { const d = new Date(x.jour + 'T12:00'); d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+      const k = d.toISOString().slice(0, 10); (sem[k] = sem[k] || []).push(x); });
+    const lSem = Object.keys(sem).sort().slice(-8).reverse();
+    $('semaines').innerHTML = `<div class="resume">${phrase}</div>` +
+      `<table><tr><th></th><th>${jourCourt(A.du)} → ${jourCourt(A.au)}</th><th>${jourCourt(B.du)} → ${jourCourt(B.au)}</th><th>Écart</th></tr>` +
+      ligne('Heures pleines', A.hp, B.hp, ' kWh') + ligne('Heures creuses', A.hc, B.hc, ' kWh') +
+      ligne('Total', A.total, B.total, ' kWh') + ligne('Coût', A.cout, B.cout, ' €', 2) +
+      ligne('Température moy.', A.temp, B.temp, ' °C', 1, true) + '</table>' +
+      `<h2 style="margin-top:16px">Les dernières semaines</h2><table><tr><th>Semaine du</th><th>kWh</th><th>€</th><th>°C moy.</th><th>vs météo</th></tr>` +
+      lSem.map(k => { const b = bilan(sem[k]); return `<tr><td>${jourCourt(k)}${b.n < 7 ? ` <span class="leg">(${b.n} j)</span>` : ''}</td>` +
+        `<td>${fmt(b.total, 0)}</td><td>${fmt(b.cout, 0)}</td><td>${fmt(b.temp)}</td><td>${pct(b.meteo)}</td></tr>`; }).join('') + '</table>' +
+      `<p class="leg">« vs météo » : écart entre ce que vous avez consommé et ce qu'on attendrait avec les températures de la semaine, d'après vos 12 derniers mois. ` +
+      `Négatif (vert) = vous avez fait mieux que d'habitude pour ce temps-là.</p>`;
+  } else $('semaines').innerHTML = '<p class="leg">Il faut au moins 14 jours de données.</p>';
   $('g-profil').innerHTML = profil.some(x => x != null)
     ? barres(profil.map((v, h) => ({lib: h % 3 === 0 ? h + 'h' : '',
         detail: `<b>De ${h}h à ${h + 1}h</b> : ${fmt(v, 2)} kW en moyenne (${hcDe[h] === 'HC' ? 'heures creuses' : 'heures pleines'})`,
@@ -212,6 +289,8 @@ function afficher() {
     ['Consommation de fond', fondW == null ? '–' : Math.round(fondW) + ' W',
       'Appareils toujours allumés (frigo, box, veilles…)'],
     ['Coût annuel de ce fond', fondW == null ? '–' : euros(fondW / 1000 * 8760 * prixMoy)],
+    ...(M ? [['Consommation hors chauffage', fmt(M.fond) + ' kWh/j', 'Estimation : ce que vous consommez les jours doux'],
+      ['Chaque degré plus froid', '+' + fmt(M.k, 2) + ' kWh/j', '≈ ' + euros(M.k * prixMoy) + ' par jour et par degré (pompe à chaleur)']] : []),
     ['Heure la plus chargée', profil.some(x => x) ? hPic + 'h (' + fmt(profil[hPic], 2) + ' kW)' : '–'],
     ['Ce mois-ci, jusqu\'à hier', fmt(somme(lm, x => x.total)) + ' kWh', euros(somme(lm, x => x.cout)) + ' hors abonnement'],
   ].map(([a, b, s]) => `<div class="ligne"><div>${a}${s ? '<small>' + s + '</small>' : ''}</div><b>${b}</b></div>`).join('');
@@ -219,9 +298,9 @@ function afficher() {
 
 function telechargerExcel() {
   const n = (x, d = 3) => x == null ? '' : x.toFixed(d).replace('.', ',');
-  const lignes = [['Date', 'Heures pleines (kWh)', 'Heures creuses (kWh)', 'Total (kWh)', 'Coût (€)', 'Écart vs moyenne 30 j (%)'].join(';')]
+  const lignes = [['Date', 'Heures pleines (kWh)', 'Heures creuses (kWh)', 'Total (kWh)', 'Coût (€)', 'Écart vs moyenne 30 j (%)', 'Température moyenne (°C)', 'Degrés-jours', 'Attendu pour cette météo (kWh)'].join(';')]
     .concat(LIGNES.map(x => [x.jour.split('-').reverse().join('/'), n(x.hp), n(x.hc), n(x.total), n(x.cout, 2),
-      x.ecart == null ? '' : Math.round(x.ecart * 100)].join(';')));
+      x.ecart == null ? '' : Math.round(x.ecart * 100), n(x.temp, 1), n(x.dju, 1), n(x.attendu, 1)].join(';')));
   const blob = new Blob(['\ufeff' + lignes.join('\r\n')], {type: 'text/csv;charset=utf-8'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = 'conso-electricite.csv'; a.click();
