@@ -6,5 +6,5 @@ la page et le fichier `docs/donnees.chiffre` ne montrent rien de lisible.
 
 ## Réglages
 - Prix, plages d'heures creuses, abonnement : fichier `config.json`.
-- Secrets (Settings > Secrets and variables > Actions) : `LINKY_PRM`, `LINKY_JETON`, `MOT_DE_PASSE_PAGE`.
+- Secrets (Settings > Secrets and variables > Actions) : `LINKY_PRM`, `LINKY_JETON`, `MOT_DE_PASSE_PAGE`, et `VILLE` (code postal, pour la température via [Open-Meteo](https://open-meteo.com)).
 - Lancer une mise à jour à la main : onglet **Actions** > « Mise à jour quotidienne Linky » > **Run workflow**.

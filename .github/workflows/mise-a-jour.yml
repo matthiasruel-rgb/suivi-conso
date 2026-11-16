@@ -26,6 +26,7 @@ jobs:
           LINKY_PRM: ${{ secrets.LINKY_PRM }}
           LINKY_JETON: ${{ secrets.LINKY_JETON }}
           MOT_DE_PASSE_PAGE: ${{ secrets.MOT_DE_PASSE_PAGE }}
+          VILLE: ${{ secrets.VILLE }}
         run: python recuperer.py
       - name: Enregistrer
         run: |
