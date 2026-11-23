@@ -116,14 +116,17 @@ def blocs(debut, fin, taille):
 # ---------- météo (Open-Meteo, gratuit, sans clé) ----------
 def lire_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": "suivi-conso (GitHub Actions, usage personnel)"})
-    for essai in range(3):
+    for essai in range(5):  # Open-Meteo répond parfois lentement : on insiste un peu
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=40) as r:
                 return json.load(r)
-        except (urllib.error.URLError, TimeoutError):
-            if essai == 2:
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or essai == 4:
                 raise
-            time.sleep(10)
+        except Exception:
+            if essai == 4:
+                raise
+        time.sleep(20 * (essai + 1))
 
 def localiser(ville):
     """Code postal ou nom de commune -> (latitude, longitude), en France en priorité."""
@@ -227,7 +230,12 @@ def main():
                 if jour in donnees["jours"]:
                     donnees["jours"][jour]["temp"] = t
         except Exception as e:
-            erreurs.append(f"Météo indisponible aujourd'hui ({type(e).__name__} : {str(e)[:120]}).")
+            print(f"Météo : échec ({type(e).__name__} : {str(e)[:120]})")
+        manque = [k for k in sorted(donnees["jours"])[-7:] if "temp" not in donnees["jours"][k]]
+        if manque:
+            erreurs.append("Température pas encore disponible pour : " + ", ".join(
+                dt.date.fromisoformat(k).strftime("%d/%m") for k in manque) + ". Elle sera récupérée à la prochaine mise à jour.")
+        print(f"Météo : {sum('temp' in v for v in donnees['jours'].values())} jours avec température sur {len(donnees['jours'])}.")
     else:
         erreurs.append("Pour afficher la température, ajoutez le secret VILLE (votre code postal) dans GitHub.")
 
